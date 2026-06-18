@@ -4,6 +4,9 @@
 
 #include "utils.h"
 
+#include "hardware/clocks.h"
+#include "pico/time.h"
+
 //#define DUMP_COMMANDS
 
 __attribute__((noinline)) void busy_wait(int count) {
@@ -47,8 +50,12 @@ void PicoSWIO::reset(int pin) {
   sm_config_set_out_shift   (&c, /*shift_right*/ false, /*autopull*/ false, /*pull_threshold*/ 32);
   sm_config_set_in_shift    (&c, /*shift_right*/ false, /*autopush*/ true,  /*push_threshold*/ 32);
 
-  // 125 mhz / 12 = 96 nanoseconds per tick, close enough to 100 ns.
-  sm_config_set_clkdiv      (&c, 12);
+  // Target ~96 ns per tick (~10.42 MHz) regardless of system clock.
+  // RP2040 boots at 125 MHz (125/12 = 10.42 MHz), but Pico 2 / RP2350 boots at
+  // 150 MHz, so a hardcoded divisor of 12 makes every SWIO bit ~17% too short and
+  // the CH32 stop-bit drops below its ~2250 ns threshold => target never ACKs.
+  float swio_clkdiv = (float)clock_get_hz(clk_sys) / 10416667.0f;
+  sm_config_set_clkdiv      (&c, swio_clkdiv);
 
   pio_sm_init       (pio0, pio_sm, pio_offset, &c);
   pio_sm_set_pins   (pio0, pio_sm, 0);
@@ -59,7 +66,7 @@ void PicoSWIO::reset(int pin) {
   sio_hw->gpio_clr    = (1 << pin);
   sio_hw->gpio_oe_set = (1 << pin);
   io_bank0_hw->io[pin].ctrl = GPIO_FUNC_SIO << IO_BANK0_GPIO0_CTRL_FUNCSEL_LSB;
-  busy_wait(100); // ~8 usec
+  busy_wait_us(8); // 8 usec reset pulse, clock/core independent (was busy_wait(100), tuned for RP2040 M0+ @125MHz)
   sio_hw->gpio_oe_clr = (1 << pin);
   io_bank0_hw->io[pin].ctrl = GPIO_FUNC_PIO0 << IO_BANK0_GPIO0_CTRL_FUNCSEL_LSB;
 
